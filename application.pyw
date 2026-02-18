@@ -859,19 +859,14 @@ class App(ctk.CTk):
             print("parse error:", e)
 
     def process_serial_data(self):
+        latest = None
         while not self.data_queue.empty():
-            data = self.data_queue.get()
+            latest = self.data_queue.get()
 
-            # VIDEO mode: always parse
-            if self.acq_mode == "VIDEO":
-                self._parse_and_update(data)
+        if latest:
+            self._parse_and_update(latest)
 
-            # SNAPSHOT mode: parse once per request
-            elif self.acq_mode == "SNAPSHOT" and not self.updating:
-                self._parse_and_update(data)
-                self.updating = True
-
-        self.after(20, self.process_serial_data)
+        self.after(100, self.process_serial_data)
 
     def send_serial_message(self):
         if self.serial_port and self.serial_port.is_open:
