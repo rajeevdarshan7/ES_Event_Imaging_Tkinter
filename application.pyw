@@ -481,47 +481,49 @@ class App(ctk.CTk):
             print("Snapshot request failed:", e)
 
     # def start_scan(self):
-    #     if self.acq_mode != "SNAPSHOT":
-    #         print("Scan only available in SNAPSHOT mode")
-    #         return
-
-    #     try:
-    #         self.scan_steps = int(self.scan_entry.get())
-    #     except ValueError:
-    #         print("Invalid scan increment")
-    #         return
-
     #     rows, cols = self.data.shape
-    #     total_cols = cols * self.scan_steps
+    #     self.scan_steps = int(self.scan_entry.get())
 
-    #     # Initialize empty stitched array
-    #     self.scan_buffer = np.zeros((rows, total_cols))
     #     self.scan_step = 0
-    #     self.scan_active = True
-
-    #     # Display empty buffer
+    #     self.scan_buffer = np.zeros((rows, cols * self.scan_steps))
     #     self.data = self.scan_buffer
+
     #     self.img.set_data(self.data)
-    #     self.img.set_extent((-0.5, total_cols - 0.5, rows - 0.5, -0.5))
+    #     self.img.set_extent((-0.5, cols * self.scan_steps - 0.5, rows - 0.5, -0.5))
     #     self.canvas.draw_idle()
 
-    #     self.scan_next_btn.grid()
-    #     print(f"Scan started: {rows}x{total_cols}")
+    #     print(f"Scan started: {rows}x{cols * self.scan_steps}")
+
+    #     self.scan_active = True
+
     def start_scan(self):
-        rows, cols = self.data.shape
-        self.scan_steps = int(self.scan_entry.get())
+        # Only valid in SNAPSHOT mode
+        if self.acq_mode != "SNAPSHOT":
+            return
 
+        steps = int(self.scan_entry.get())
+        r, c = self.data.shape
+
+        # ---- HARD RESET SCAN STATE ----
+        self.scan_active = True
         self.scan_step = 0
-        self.scan_buffer = np.zeros((rows, cols * self.scan_steps))
-        self.data = self.scan_buffer
+        self.scan_steps = steps
 
-        self.img.set_data(self.data)
-        self.img.set_extent((-0.5, cols * self.scan_steps - 0.5, rows - 0.5, -0.5))
+        # Allocate fresh buffer (THIS prevents multiplication)
+        self.scan_buffer = np.zeros((r, c * steps))
+
+        # Display scan buffer
+        self.img.set_array(self.scan_buffer)
+        self.img.set_extent((-0.5, c * steps - 0.5, r - 0.5, -0.5))
+        self.ax.set_xlim(-0.5, c * steps - 0.5)
+        self.ax.set_ylim(r - 0.5, -0.5)
+        self.ax.set_xticks(range(c * steps))
+        self.ax.set_yticks(range(r))
+
         self.canvas.draw_idle()
 
-        print(f"Scan started: {rows}x{cols * self.scan_steps}")
+        print(f"Scan started: {r}x{c*steps}")
 
-        self.scan_active = True
 
 
     def scan_next(self):
