@@ -284,21 +284,20 @@ class App(ctk.CTk):
         # -----------------------------
         # Humidity display (right panel)
         # -----------------------------
-        self.humidity_title = ctk.CTkLabel(
-            self.panel_frame,
-            text="Humidity",
-            font=("Arial", 14, "bold")
+        self.humidity_label = ctk.CTkLabel(
+            self.control_frame,
+            text="Humidity: -- %",
+            font=("Arial", 18, "bold"),
+            text_color="#7CFC98"
         )
-        self.humidity_title.grid(row=11, column=0, pady=(15, 2))
 
-        self.humidity_value = ctk.CTkLabel(
-            self.panel_frame,
-            text="-- %",
-            font=("Arial", 20, "bold"),
-            text_color="#7CFC98"  # light green, optional
+        # Place it BELOW the Controls box
+        self.humidity_label.grid(
+            row=2, column=0,
+            padx=(2.5, 10),
+            pady=(0, 10),
+            sticky="n"
         )
-        self.humidity_value.grid(row=12, column=0, pady=(0, 10))
-
 
         # Capture button
         self.capture_button = ctk.CTkButton(
