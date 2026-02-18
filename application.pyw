@@ -39,6 +39,8 @@ class App(ctk.CTk):
 
         # Initialize
         rows, cols = SENSOR_PROFILES[DEFAULT_SENSOR]
+        self.sensor_rows = rows
+        self.sensor_cols = cols
         self.data = np.random.rand(rows, cols)
         self.mode = "Normal"
         self.gain = 1 # to be passed into port
@@ -56,6 +58,7 @@ class App(ctk.CTk):
         self.cbar = None
         self.acq_mode = "VIDEO"
         self.snapshot_pending = False
+        self.scan_started = False
         self.scan_active = False
         self.scan_step = 0
         self.scan_steps = 1   # default, user configurable
@@ -134,6 +137,10 @@ class App(ctk.CTk):
         # Initialize update flag
         self.update_interval = update_interval
         self.updating = False
+
+        # Initiliaze UI 
+        self.ui_state = "IDLE"
+        self.update_controls_ui()
 
         # check for serial
         self.after(20, self.process_serial_data)
@@ -219,34 +226,69 @@ class App(ctk.CTk):
         self.clear_btn.pack(padx=5, pady=(5, 10))
 
     def setup_controls(self):
+        ACTION_ROW = 12
+
+        # -----------------------------
         # Serial Port Controls
+        # -----------------------------
         self.setup_serial_controls()
 
-        # Control panel widgets
-        self.title_label = ctk.CTkLabel(self.panel_frame, text="Controls", font=("Arial", 20, "bold"))
-        self.title_label.grid(row=0, column=0, pady=(10,5))
+        # -----------------------------
+        # Controls Title
+        # -----------------------------
+        self.title_label = ctk.CTkLabel(
+            self.panel_frame,
+            text="Controls",
+            font=("Arial", 20, "bold")
+        )
+        self.title_label.grid(row=0, column=0, pady=(10, 5))
 
-        # Colormap selector
+        # -----------------------------
+        # Humidity Display
+        # -----------------------------
+        self.humidity_label = ctk.CTkLabel(
+            self.panel_frame,
+            text="Humidity: -- %",
+            font=("Arial", 16, "bold"),
+            text_color="#7CFC98"
+        )
+
+        self.humidity_label.grid(
+            row=ACTION_ROW + 6,
+            column=0,
+            pady=(5, 10)
+)
+
+        # =============================
+        # CONFIGURATION SECTION
+        # =============================
+
+        # ---- Mode Selection ----
         self.mode_label = ctk.CTkLabel(self.panel_frame, text="Mode Selection:")
-        self.mode_label.grid(row=1, column=0, pady=(0, 5))
-        
+        self.mode_label.grid(row=1, column=0, pady=(5, 2))
+
         self.mode_select = ctk.CTkOptionMenu(
             self.panel_frame,
             values=["Normal", "Color", "Threshold"],
-            # values=["Normal", "Color", "Threshold", "ESD Capture"],
             command=self.update_mode
         )
-        self.mode_select.grid(row=2, column=0, pady=5)
+        self.mode_select.grid(row=2, column=0, pady=(0, 8))
         self.mode_select.set("Normal")
 
-        # Update interval slider
-        self.speed_frame = ctk.CTkFrame(master=self.panel_frame)
-        self.speed_frame.grid_columnconfigure(2, weight=2)
-        self.speed_frame.grid_rowconfigure(1, weight=1)
+        # ---- Refresh Speed ----
+        self.speed_frame = ctk.CTkFrame(self.panel_frame)
+        self.speed_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
+        self.speed_frame.grid_columnconfigure(1, weight=1)
 
         self.speed_label = ctk.CTkLabel(self.speed_frame, text="Refresh Speed:")
-        self.speed_label.grid(row=0, column=0, padx=12.5, sticky="w")
-        
+        self.speed_label.grid(row=0, column=0, sticky="w", padx=5)
+
+        self.speed_value_slider = ctk.CTkLabel(
+            self.speed_frame,
+            text=f"{self.update_interval}ms"
+        )
+        self.speed_value_slider.grid(row=0, column=1, sticky="e", padx=5)
+
         self.speed_slider = ctk.CTkSlider(
             self.speed_frame,
             from_=2000,
@@ -254,149 +296,140 @@ class App(ctk.CTk):
             number_of_steps=50,
             command=self.update_speed
         )
-        self.speed_slider.grid(row=1, column=0, columnspan=2, padx=5, pady=10, sticky="ew")
-
-        self.speed_value_slider = ctk.CTkLabel(self.speed_frame, text=str(self.update_interval) + "ms")
-        self.speed_value_slider.grid(row=0, column=1, padx=10, pady=0, sticky="e")
-
-        self.speed_frame.grid(row=3, column=0, pady=5, padx=10)
+        self.speed_slider.grid(
+            row=1, column=0, columnspan=2,
+            sticky="ew", padx=5, pady=8
+        )
         self.speed_slider.set(self.update_interval)
 
-        self.acq_label = ctk.CTkLabel(self.panel_frame, text="Acquisition Mode:")
-        self.acq_label.grid(row=7, column=0, pady=(10, 2))
-
-        self.acq_select = ctk.CTkOptionMenu(
-            self.panel_frame,
-            values=["VIDEO", "SNAPSHOT"],
-            command=self.change_acq_mode
-        )
-        self.acq_select.grid(row=8, column=0, pady=(2, 10))
-        self.acq_select.set("VIDEO")
-
-        # -----------------------------
-        # Moving Sensor Scan Controls
-        # -----------------------------
-        self.scan_label = ctk.CTkLabel(self.panel_frame, text="Scan Increment:")
-        self.scan_label.grid(row=12, column=0, pady=(10, 2))
-
-        self.scan_entry = ctk.CTkEntry(self.panel_frame, width=80)
-        self.scan_entry.insert(0, "3")
-        self.scan_entry.grid(row=13, column=0, pady=(0, 5))
-
-        self.scan_start_btn = ctk.CTkButton(
-            self.panel_frame,
-            text="Start Scan",
-            command=self.start_scan
-        )
-        self.scan_start_btn.grid(row=14, column=0, pady=(5, 5))
-
-        self.scan_next_btn = ctk.CTkButton(
-            self.panel_frame,
-            text="Next",
-            command=self.scan_next
-        )
-        self.scan_next_btn.grid(row=15, column=0, pady=(5, 10))
-        self.scan_next_btn.grid_remove()
-
+        # ---- Sensor Type ----
         self.sensor_label = ctk.CTkLabel(self.panel_frame, text="Sensor Type:")
-        self.sensor_label.grid(row=9, column=0, pady=(10, 2))
+        self.sensor_label.grid(row=4, column=0, pady=(10, 2))
 
         self.sensor_select = ctk.CTkOptionMenu(
             self.panel_frame,
             values=list(SENSOR_PROFILES.keys()),
             command=self.change_sensor
         )
-        self.sensor_select.grid(row=10, column=0, pady=(2, 10))
+        self.sensor_select.grid(row=5, column=0, pady=(0, 8))
         self.sensor_select.set("ES Sensor 8x8")
 
-        # Update gain slider
-        self.gain_frame = ctk.CTkFrame(master=self.panel_frame)
-        self.gain_frame.grid_columnconfigure(2, weight=2)
-        self.gain_frame.grid_rowconfigure(1, weight=1)
+        # ---- Acquisition Mode ----
+        self.acq_label = ctk.CTkLabel(self.panel_frame, text="Acquisition Mode:")
+        self.acq_label.grid(row=6, column=0, pady=(10, 2))
 
-        self.gain_label = ctk.CTkLabel(self.gain_frame, text="Gain:")
-        # self.gain_label.grid(row=0, column=0, padx=12.5, sticky="w")
-        
-        self.gain_slider = ctk.CTkSlider(
-            self.gain_frame,
-            from_=1,
-            to=10,
-            number_of_steps=50,
-            command=self.update_gain
+        self.acq_select = ctk.CTkOptionMenu(
+            self.panel_frame,
+            values=["VIDEO", "SNAPSHOT"],
+            command=self.change_acq_mode
         )
+        self.acq_select.grid(row=7, column=0, pady=(0, 8))
+        self.acq_select.set("VIDEO")
 
-        # self.gain_slider.grid(row=1, column=0, columnspan=2, padx=5, pady=10, sticky="ew")
-
-        self.gain_value_slider = ctk.CTkLabel(self.gain_frame, text=f"{self.gain:.2f}")
-        # self.gain_value_slider.grid(row=0, column=1, padx=10, pady=0, sticky="e")
-
-        # self.gain_frame.grid(row=4, column=0, pady=5, padx=10)
-        self.gain_slider.set(self.gain)
-
-        # -----------------------------
-        # Humidity display (right panel)
-        # -----------------------------
-        self.humidity_label = ctk.CTkLabel(
-            self.control_frame,
-            text="Humidity: -- %",
-            font=("Arial", 18, "bold"),
-            text_color="#7CFC98"
+        # ---- Scan / Interleaving ----
+        self.scan_label = ctk.CTkLabel(
+            self.panel_frame,
+            text="Interleaving Steps:"
         )
+        self.scan_label.grid(row=8, column=0, pady=(10, 2))
 
-        # Place it BELOW the Controls box
-        self.humidity_label.grid(
-            row=2, column=0,
-            padx=(2.5, 10),
-            pady=(0, 10),
-            sticky="n"
+        self.scan_entry = ctk.CTkEntry(self.panel_frame, width=80)
+        self.scan_entry.insert(0, "1")
+        self.scan_entry.grid(row=9, column=0, pady=(0, 6))
+
+        self.scan_start_btn = ctk.CTkButton(
+            self.panel_frame,
+            text="Start Scan",
+            command=self.start_scan
         )
+        self.scan_start_btn.grid(row=10, column=0, pady=(0, 10))
 
-        # Capture button
+        self.scan_next_btn = ctk.CTkButton(
+            self.panel_frame,
+            text="Next",
+            command=self.scan_next
+        )
+        self.scan_next_btn.grid(row=11, column=0, pady=(0, 10))
+        self.scan_next_btn.grid_remove()
+
+        # =============================
+        # ACTION BUTTON ZONE (FIXED)
+        # =============================
+        ACTION_ROW = 12
+
         self.capture_button = ctk.CTkButton(
             self.panel_frame,
-            text="Start",
+            text="Capture",
             command=self.capture
         )
+        self.capture_button.grid(row=ACTION_ROW, column=0, pady=5)
+        self.capture_button.grid_remove()
 
-        # Record button
         self.record_button = ctk.CTkButton(
             self.panel_frame,
             text="Record",
             command=self.record
         )
+        self.record_button.grid(row=ACTION_ROW + 1, column=0, pady=5)
+        self.record_button.grid_remove()
 
-        # Reset/Auto tune gain Button
-        self.reset_button = ctk.CTkButton(
-            self.panel_frame,
-            text="Reset / Gain",
-            command=self.rst
-        )
-
-        # Tare/Zero Button
         self.tare_button = ctk.CTkButton(
             self.panel_frame,
             text="Tare / Zero",
             command=self.tare
         )
+        self.tare_button.grid(row=ACTION_ROW + 2, column=0, pady=5)
+        self.tare_button.grid_remove()
 
-        # Save Image Button
+        self.reset_button = ctk.CTkButton(
+            self.panel_frame,
+            text="Reset / Gain",
+            command=self.rst
+        )
+        self.reset_button.grid(row=ACTION_ROW + 3, column=0, pady=5)
+        self.reset_button.grid_remove()
+
         self.save_button = ctk.CTkButton(
             self.panel_frame,
             text="Save Image",
             command=self.save_im
         )
+        self.save_button.grid(row=ACTION_ROW + 4, column=0, pady=(5, 10))
+        self.save_button.grid_remove()
 
-        # Dev: serial terminal
+        self.stop_button = ctk.CTkButton(
+            self.panel_frame,
+            text="STOP",
+            fg_color="#d13b30",
+            hover_color="#b03028",
+            command=self.stop_all
+        )
+        self.stop_button.grid(row=ACTION_ROW + 5, column=0, pady=(10, 10))
+        self.stop_button.grid_remove()
+
+        # -----------------------------
+        # Dev Terminal
+        # -----------------------------
         self.setup_terminal()
+
+    def _set_config_controls_state(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+
+        self.mode_select.configure(state=state)
+        self.sensor_select.configure(state=state)
+        self.acq_select.configure(state=state)
+        self.scan_entry.configure(state=state)
 
     def change_sensor(self, sensor_name):
         rows, cols = SENSOR_PROFILES[sensor_name]
+        self.sensor_rows = rows
+        self.sensor_cols = cols
 
         # ---- stop everything ----
         self.updating = False
         self.scan_active = False
         self.scan_step = 0
-        self.scan_steps = 0
+        self.scan_steps = 1
         self.scan_buffer = None
 
         # ---- reset data ----
@@ -419,50 +452,57 @@ class App(ctk.CTk):
 
         self.canvas.draw_idle()
 
+    def update_controls_ui(self):
+        # ----------------------------
+        # Hide EVERYTHING dynamic
+        # ----------------------------
+        widgets = [
+            self.scan_label,
+            self.scan_entry,
+            self.scan_start_btn,
+            self.scan_next_btn,
+            self.capture_button,
+            self.record_button,
+            self.tare_button,
+            self.reset_button,
+            self.stop_button,
+        ]
 
-    # def change_sensor(self, sensor_name):
-    #     rows, cols = SENSOR_PROFILES[sensor_name]
+        for w in widgets:
+            w.grid_remove()
 
-    #     self.updating = False
-    #     self.scan_active = False
-    #     self.scan_step = 0
+        # ----------------------------
+        # IDLE / READY
+        # ----------------------------
+        if self.ui_state in ("IDLE", "READY"):
+            self._set_config_controls_state(True)
 
-    #     # self.data = np.zeros((rows, cols))
-    #     if self.serial_port and self.serial_port.is_open:
-    #         self.data = np.zeros((rows, cols))
-    #     else:
-    #         self.data = np.random.rand(rows, cols)  # demo mode
-    #     self.offset = np.zeros_like(self.data)
-    #     self.initFlag = True
+            # Start Scan is ONLY here
+            self.scan_start_btn.grid()
 
-    #     # DO NOT clear figure or axes
-    #     self.img.set_data(self.data)
-    #     self.img.set_extent((-0.5, cols - 0.5, rows - 0.5, -0.5))
+            if self.acq_mode == "SNAPSHOT":
+                self.scan_label.grid()
+                self.scan_entry.grid()
 
-    #     self.ax.set_xticks(range(cols))
-    #     self.ax.set_yticks(range(rows))
-    #     self.ax.set_xlim(-0.5, cols - 0.5)
-    #     self.ax.set_ylim(rows - 0.5, -0.5)
+        # ----------------------------
+        # RUNNING / SCANNING
+        # ----------------------------
+        elif self.ui_state in ("RUNNING", "SCANNING"):
+            self._set_config_controls_state(False)
 
-    #     self.canvas.draw_idle()
+            self.capture_button.grid()
+            self.record_button.grid()
+            self.tare_button.grid()
+            self.reset_button.grid()
+            self.stop_button.grid()
 
-    #     self.scan_buffer = None
-    #     self.scan_steps = 0
-    #     self.scan_step = 0
+            if self.ui_state == "SCANNING":
+                self.scan_next_btn.grid()
 
     def change_acq_mode(self, mode):
         self.acq_mode = mode
-
-        if mode == "VIDEO":
-            self.updating = True          # always live
-            self.update_interval = 1      # fastest UI refresh
-            self.speed_slider.set(1)
-            self.snapshot_pending = False
-            self.snapshot_button.grid_remove()
-        else:
-            self.updating = False         # wait for snapshot
-            self.snapshot_pending = False
-            self.snapshot_button.grid()
+        self.ui_state = "READY"
+        self.update_controls_ui()
 
     def capture_snapshot(self):
         if not self.serial_port or not self.serial_port.is_open:
@@ -480,48 +520,96 @@ class App(ctk.CTk):
         except Exception as e:
             print("Snapshot request failed:", e)
 
-    # def start_scan(self):
-    #     if self.acq_mode != "SNAPSHOT":
-    #         print("Scan only available in SNAPSHOT mode")
-    #         return
-
-    #     try:
-    #         self.scan_steps = int(self.scan_entry.get())
-    #     except ValueError:
-    #         print("Invalid scan increment")
-    #         return
-
-    #     rows, cols = self.data.shape
-    #     total_cols = cols * self.scan_steps
-
-    #     # Initialize empty stitched array
-    #     self.scan_buffer = np.zeros((rows, total_cols))
-    #     self.scan_step = 0
-    #     self.scan_active = True
-
-    #     # Display empty buffer
-    #     self.data = self.scan_buffer
-    #     self.img.set_data(self.data)
-    #     self.img.set_extent((-0.5, total_cols - 0.5, rows - 0.5, -0.5))
-    #     self.canvas.draw_idle()
-
-    #     self.scan_next_btn.grid()
-    #     print(f"Scan started: {rows}x{total_cols}")
     def start_scan(self):
-        rows, cols = self.data.shape
-        self.scan_steps = int(self.scan_entry.get())
+        rows = self.sensor_rows
+        cols = self.sensor_cols
+
+        # ----------------------------
+        # Read interleaving steps
+        # ----------------------------
+        if self.acq_mode == "SNAPSHOT":
+            try:
+                self.scan_steps = int(self.scan_entry.get())
+                if self.scan_steps <= 0:
+                    raise ValueError
+            except ValueError:
+                print("Invalid interleaving steps")
+                return
+        else:
+            self.scan_steps = 0
 
         self.scan_step = 0
-        self.scan_buffer = np.zeros((rows, cols * self.scan_steps))
-        self.data = self.scan_buffer
+        self.scan_started = True
 
-        self.img.set_data(self.data)
-        self.img.set_extent((-0.5, cols * self.scan_steps - 0.5, rows - 0.5, -0.5))
+        # ==================================================
+        # SNAPSHOT MODE
+        # ==================================================
+        if self.acq_mode == "SNAPSHOT":
+
+            # -------- Interleaved snapshot (steps > 1)
+            if self.scan_steps > 1:
+                self.scan_active = True
+                self.ui_state = "SCANNING"
+
+                total_cols = cols * self.scan_steps
+                self.scan_buffer = np.zeros((rows, total_cols))
+                self.data = self.scan_buffer
+
+                # Rebind image
+                self.img.set_array(self.data)
+                self.img.set_extent((-0.5, total_cols - 0.5, rows - 0.5, -0.5))
+                self.ax.set_xlim(-0.5, total_cols - 0.5)
+                self.ax.set_ylim(rows - 0.5, -0.5)
+
+                # Interleaving labels
+                self.ax.set_xticks(range(total_cols))
+                self.ax.set_xticklabels(
+                    [f"C{c // self.scan_steps}-{c % self.scan_steps}"
+                    for c in range(total_cols)],
+                    rotation=90,
+                    fontsize=8
+                )
+
+            # -------- Single snapshot (steps == 1)
+            else:
+                self.scan_active = False
+                self.ui_state = "RUNNING"
+
+                self.data = np.zeros((rows, cols))
+                self.img.set_array(self.data)
+                self.img.set_extent((-0.5, cols - 0.5, rows - 0.5, -0.5))
+                self.ax.set_xlim(-0.5, cols - 0.5)
+                self.ax.set_ylim(rows - 0.5, -0.5)
+                self.ax.set_xticks(range(cols))
+                self.ax.set_xticklabels(range(cols))
+
+            # SNAPSHOT MUST FIRE IMMEDIATELY
+            self.snapshot_pending = True
+            self.updating = False
+
+            if self.serial_port and self.serial_port.is_open:
+                try:
+                    self.serial_port.write(b"snapshot\n")
+                except Exception as e:
+                    print("Snapshot request failed:", e)
+
+        # ==================================================
+        # VIDEO MODE
+        # ==================================================
+        else:
+            self.scan_active = False
+            self.ui_state = "RUNNING"
+
+            self.data = np.zeros((rows, cols))
+            self.img.set_array(self.data)
+            self.img.set_extent((-0.5, cols - 0.5, rows - 0.5, -0.5))
+            self.ax.set_xlim(-0.5, cols - 0.5)
+            self.ax.set_ylim(rows - 0.5, -0.5)
+            self.ax.set_xticks(range(cols))
+            self.ax.set_xticklabels(range(cols))
+
         self.canvas.draw_idle()
-
-        print(f"Scan started: {rows}x{cols * self.scan_steps}")
-
-        self.scan_active = True
+        self.update_controls_ui()
 
 
     def scan_next(self):
@@ -529,9 +617,9 @@ class App(ctk.CTk):
             return
 
         if self.scan_step >= self.scan_steps:
-            print("Scan complete")
             self.scan_active = False
-            self.scan_next_btn.grid_remove()
+            self.scan_started = False
+            self.update_controls_ui()
             return
 
         # Arm snapshot capture
@@ -544,6 +632,26 @@ class App(ctk.CTk):
         else:
             print("Serial not open")
 
+    def stop_all(self):
+        # Stop acquisition
+        self.updating = False
+        self.recording = False
+        self.scan_active = False
+        self.scan_started = False
+        self.snapshot_pending = False
+
+        # Restore defaults
+        self.update_interval = 250
+        self.speed_slider.set(250)
+        self.speed_value_slider.configure(text="250ms")
+
+        # Reset buttons
+        self.record_button.configure(text="Record", command=self.record)
+
+        # Reset UI
+        self.ui_state = "READY"
+        self.update_controls_ui()
+
     def update_plot(self):
         if self.updating:
 
@@ -553,7 +661,7 @@ class App(ctk.CTk):
                     self.tmp_gif.append(self.data + self.offset)
 
                 self.img.set_data(self.data + self.offset)
-                self.img.set(clim=[0,5])
+                self.img.set(clim=[0, 3.3])
                 self.canvas.draw()
                 for t in list(self.ax.texts):
                     t.remove()
@@ -622,8 +730,6 @@ class App(ctk.CTk):
             self.baud_option.configure(state="disabled")
             self.refresh_btn.configure(state="disabled")
             self.terminal.insert("end", f"Connected to {port} @ {baud} baud\n")
-
-            self.capture_button.grid(row=5, column=0, pady=10) # enable start/capture control button
             
         except Exception as e:
             print(f"Error: {str(e)}\n")
@@ -655,33 +761,20 @@ class App(ctk.CTk):
                 if char:
                     buffer += char
 
+                    # Prevent runaway buffer
                     if len(buffer) > 4096:
-                        buffer = ""     # full resync if buffer gets too large (garbage/spam)
+                        buffer = ""
 
-                    # check for full frame <.....>
-                    if '<' in buffer and '>' in buffer:
+                    # Look for a complete frame < ... >
+                    while '<' in buffer and '>' in buffer:
                         start = buffer.find('<')
                         end   = buffer.find('>')
 
-                        frame = buffer[start+1:end]  # remove < >
-                        buffer = buffer[end+1:]      # clean buffer
+                        frame = buffer[start + 1:end]   # strip < >
+                        buffer = buffer[end + 1:]       # consume buffer
 
-                        # split: "values | checksum"
-                        if '|' in frame:
-                            payload, checksum_hex = frame.rsplit('|', 1)
-                            checksum_hex = checksum_hex.strip()
-
-                            calc = 0
-                            for c in payload:
-                                calc ^= ord(c)
-
-                            # convert calc to 2-digit hex string
-                            calc_hex = format(calc, "02X")
-
-                            if calc_hex == checksum_hex:
-                                self.data_queue.put(payload + "\n")   # valid
-                            else:
-                                print("Checksum mismatch:", calc_hex, checksum_hex)
+                        # NO checksum, push raw payload
+                        self.data_queue.put(frame.strip() + "\n")
 
             except Exception as e:
                 self.data_queue.put(f"Error: {str(e)}\n")
@@ -689,155 +782,66 @@ class App(ctk.CTk):
             time.sleep(0.001)
 
 
-    # May need to play around with this function
-    def process_serial_data(self):
-        while not self.data_queue.empty():
-
-            data = self.data_queue.get()
-
-            # Always parse data in VIDEO mode
-            if self.acq_mode == "VIDEO":
-                self._parse_and_update(data)
-
-            # SNAPSHOT mode → parse ONCE, then stop
-            elif self.acq_mode == "SNAPSHOT" and not self.updating:
-                self._parse_and_update(data)
-                self.updating = True   # block further updates
-
-
-            # if (not self.updating):
-            #     self.terminal.insert("end", data)
-            #     self.terminal.see("end")
-
-            # else:
-                # parts = data.split("|")
-
-                # sensor_values_str = parts[0].strip().split()
-
-                # humidity = None
-
-                # for p in parts[1:]:
-                #     p = p.strip()
-
-                #     if p.startswith("HUM="):
-                #         try:
-                #             humidity = float(p.split("=")[1])
-                #         except ValueError:
-                #             pass  # ignore malformed humidity
-
-                # if humidity is not None:
-                #     self.humidity_value.configure(text=f"Humidity: {humidity:.2f} %")
-
-                # rowNum, colNum = self.data.shape
-                # try:
-                #     # values = np.array([float(i) for i in data[:rowNum * colNum]])
-                #     values = np.array(
-                #         [float(v) for v in sensor_values_str[:rowNum * colNum]]
-                #     )
-
-                #     self.data = np.flip(values.reshape(rowNum, colNum), axis=1)
-
-                #     if self.initFlag:
-                #         self.offset = np.zeros_like(self.data)
-                #         self.initFlag = False
-                # except Exception as e:
-                #     print("reshape error:", e)
-                
-        self.after(20, self.process_serial_data)
-
-    # def _parse_and_update(self, data):
-    #     parts = data.split("|")
-    #     sensor_values_str = parts[0].strip().split()
-
-    #     humidity = None
-    #     for p in parts[1:]:
-    #         p = p.strip()
-    #         if p.startswith("HUM="):
-    #             try:
-    #                 humidity = float(p.split("=")[1])
-    #             except ValueError:
-    #                 pass
-
-    #     if humidity is not None:
-    #         self.humidity_label.configure(text=f"{humidity:.2f} %")
-
-    #     rowNum, colNum = self.data.shape
-    #     try:
-    #         values = np.array(
-    #             [float(v) for v in sensor_values_str[:rowNum * colNum]]
-    #         )
-    #         frame = np.flip(values.reshape(rowNum, colNum), axis=1)
-
-    #         # -----------------------------
-    #         # SCAN MODE STITCHING
-    #         # -----------------------------
-    #         if self.scan_active:
-    #             start_col = self.scan_step * colNum
-    #             end_col = start_col + colNum
-
-    #             self.scan_buffer[:, start_col:end_col] = frame
-    #             self.scan_step += 1
-
-    #             self.data = self.scan_buffer
-    #         else:
-    #             self.data = frame
-
-    #         self.img.set_data(self.data)
-    #         self.canvas.draw_idle()
-
-    #         if self.acq_mode == "SNAPSHOT" and self.snapshot_pending:
-    #             self.save_im()
-    #             self.snapshot_pending = False
-
-    #     except Exception as e:
-    #         print("parse error:", e)
     def _parse_and_update(self, data):
         parts = data.split("|")
         sensor_values_str = parts[0].strip().split()
 
         # -----------------------------
-        # HUMIDITY
+        # HUMIDITY (raw numeric)
         # -----------------------------
         humidity = None
-        for p in parts[1:]:
-            p = p.strip()
-            if p.startswith("HUM="):
-                try:
-                    humidity = float(p.split("=")[1])
-                except ValueError:
-                    pass
+        if len(parts) > 1:
+            try:
+                humidity = float(parts[1].strip())
+            except ValueError:
+                pass
 
         if humidity is not None:
             self.humidity_label.configure(text=f"{humidity:.2f} %")
 
-        rowNum, colNum = self.data.shape
+        rowNum = self.sensor_rows
+        colNum = self.sensor_cols
 
         try:
+            expected = rowNum * colNum
+            if len(sensor_values_str) < expected:
+                return  # incomplete frame, ignore safely
+
             values = np.array(
-                [float(v) for v in sensor_values_str[:rowNum * colNum]]
+                [float(v) for v in sensor_values_str[:expected]]
             )
 
             frame = np.flip(values.reshape(rowNum, colNum), axis=1)
 
-            # -----------------------------
-            # SCAN MODE STITCHING
-            # -----------------------------
+            # =============================
+            # INTERLEAVED SCAN MODE
+            # =============================
             if self.scan_active:
-                # Stop scan if buffer is full
+
+                # 🔒 HARD STOP — do not write past buffer
                 if self.scan_step >= self.scan_steps:
+                    self.scan_active = False
+                    self.ui_state = "READY"
+                    self.update_controls_ui()
                     return
 
-                start_col = self.scan_step * colNum
-                end_col = start_col + colNum
+                for c in range(colNum):
+                    target_col = c * self.scan_steps + self.scan_step
+                    self.scan_buffer[:, target_col] = frame[:, c]
 
-                self.scan_buffer[:, start_col:end_col] = frame
                 self.scan_step += 1
-
                 self.data = self.scan_buffer
-
-                # IMPORTANT: rebind imshow if first scan frame
                 self.img.set_array(self.data)
 
+                # Auto-finish scan
+                if self.scan_step >= self.scan_steps:
+                    self.scan_active = False
+                    self.ui_state = "READY"
+                    self.update_controls_ui()
+
+            # =============================
+            # NORMAL / VIDEO / SINGLE SNAPSHOT
+            # =============================
             else:
                 self.data = frame
                 self.img.set_array(self.data)
@@ -854,7 +858,20 @@ class App(ctk.CTk):
         except Exception as e:
             print("parse error:", e)
 
+    def process_serial_data(self):
+        while not self.data_queue.empty():
+            data = self.data_queue.get()
 
+            # VIDEO mode: always parse
+            if self.acq_mode == "VIDEO":
+                self._parse_and_update(data)
+
+            # SNAPSHOT mode: parse once per request
+            elif self.acq_mode == "SNAPSHOT" and not self.updating:
+                self._parse_and_update(data)
+                self.updating = True
+
+        self.after(20, self.process_serial_data)
 
     def send_serial_message(self):
         if self.serial_port and self.serial_port.is_open:
@@ -882,13 +899,13 @@ class App(ctk.CTk):
             self.mode = "Normal"
             self.img.set_cmap("plasma")
             self.img.set_data(self.data)
-            self.img.set(clim=[-10, 10]) # may need to change accordingly of readings
+            self.img.set(clim=[0, 3.3]) # may need to change accordingly of readings
             self.canvas.draw()
         elif (mode == "Color"):
             self.mode = "Color"
             self.img.set_cmap("gist_rainbow")
             self.img.set_data(self.data)
-            self.img.set(clim=[-10, 10]) # may need to change accordingly of readings
+            self.img.set(clim=[0, 3.3]) # may need to change accordingly of readings
             self.canvas.draw()
         elif (mode == "Threshold"):
             self.mode = "Threshold"
@@ -907,51 +924,35 @@ class App(ctk.CTk):
 
     def capture(self):
         self.updating = not self.updating
-        if not self.updating:
-            self.capture_button.configure(text="Continue")
-            self.record_button.grid_forget()
-            self.save_button.grid(row=7, column=0, pady=(2.5,10))
-            if (np.all(self.offset) == 0):
-                self.tare_button.grid(row=8, column=0, pady=(2.5,10))
 
-        else:
+        if self.updating:
+            self.ui_state = "RUNNING"
             if self.serial_port and self.serial_port.is_open:
-                message = "start"
-                try:
-                    self.serial_port.write(message.encode())
-                    self.terminal.insert("end", f"Sent: {message}")
-                    self.entry.delete(0, "end")
-                except Exception as e:
-                    self.terminal.insert("end", f"Send error: {str(e)}\n")
-            else:
-                self.terminal.insert("end", "Port not open!\n")
-            self.terminal.insert("end", "Port not open!\n")
-            self.record_button.grid(row=6, column=0, pady=(2.5,10))
-            self.capture_button.configure(text="Capture")
-            self.save_button.grid_forget()
-            self.tare_button.grid_forget()
+                self.serial_port.write(b"start")
             self.update_plot()
+        else:
+            self.ui_state = "READY"
+
+        self.update_controls_ui()
 
     def save_im(self):
         # saving image to folder "Captured", one liner to improve speed not result from gen AI
         self.fig.savefig("./Captured/" + str(np.amax(np.array(list(map(int, [os.path.splitext(file)[0] for file in os.listdir("./Captured")])))) + 1) if len(os.listdir("./Captured")) else "./Captured/" + str(0))
     
     def tare(self):
-        # add code for taring/zeroing 
-        self.offset = -(self.data)
+        self.offset = -self.data
 
-        self.reset_button.grid(row=8, column=0, pady=(2.5,10))
-        self.tare_button.grid_forget()
+        self.tare_button.grid_remove()
+        self.reset_button.grid(row=15, column=0, pady=5)
 
         self.img.set_data(self.data + self.offset)
         self.canvas.draw()
         
     def rst(self):
-        self.offset = np.zeros(self.data.shape)
+        self.offset = np.zeros_like(self.data)
 
-        self.reset_button.grid_forget()
-        if not self.updating:
-            self.tare_button.grid(row=8, column=0, pady=(2.5,10))
+        self.reset_button.grid_remove()
+        self.tare_button.grid(row=14, column=0, pady=5)
 
         self.img.set_data(self.data)
         self.canvas.draw()
@@ -966,32 +967,59 @@ class App(ctk.CTk):
         self.speed_value_slider.configure(text=f"{self.update_interval}ms")
     
     def record(self):
-        self.record_button.configure(text="Stop Recording", command=self.stop_record)
-        self.capture_button.grid_forget()
-        self.reset_button.grid_forget()
-        self.update_interval = 1
-        self.speed_slider.set(1)
-        self.speed_value_slider.configure(text="1ms")
+        if self.recording:
+            return  # already recording, do nothing
+
+        self.recording = True
+        self.tmp_gif = []
+
+        # Button state
+        self.record_button.configure(
+            text="Stop Recording",
+            command=self.stop_record
+        )
+
+        # Disable config controls (NOT hide)
         self.speed_slider.configure(state="disabled")
         self.gain_slider.configure(state="disabled")
-        self.tmp_gif = []
-        self.recording = True
+
+        # Fast update
+        self.update_interval = 33
+        self.speed_slider.set(1)
+        self.speed_value_slider.configure(text="1ms")
 
     def stop_record(self):
-        # export to gif, time unit 0.25 second per frame
-        self.export_gif(data = self.tmp_gif, cmap_type = self.img.get_cmap(), output_file = "./Captured/" + str(np.amax(np.array(list(map(int, [os.path.splitext(file)[0] for file in os.listdir("./Captured")])))) + 1) + ".gif" if len(os.listdir("./Captured")) else "./Captured/" + str(0) + ".gif")
+        if not self.recording:
+            return
 
         self.recording = False
-        self.tmp_gif = []
-        self.gain_slider.configure(state="normal")
+
+        # Restore button
+        self.record_button.configure(
+            text="Record",
+            command=self.record
+        )
+
+        # Restore controls
         self.speed_slider.configure(state="normal")
-        self.speed_slider.set(250)
+        self.gain_slider.configure(state="normal")
+
         self.update_interval = 250
-        self.speed_value_slider.configure(text=f"{self.update_interval}ms")
-        if (np.all(self.offset) != 0):
-            self.reset_button.grid(row=8, column=0, pady=(2.5,10))
-        self.capture_button.grid(row=5, column=0, pady=10)
-        self.record_button.configure(text="Record", command=self.record)
+        self.speed_slider.set(250)
+        self.speed_value_slider.configure(text="250ms")
+
+        # 🚨 Guard: nothing recorded
+        if not self.tmp_gif:
+            print("No frames recorded — skipping GIF export")
+            return
+
+        self.export_gif(
+            data=self.tmp_gif,
+            cmap_type=self.img.get_cmap(),
+            output_file=self._next_capture_filename(".gif")
+        )
+
+        self.tmp_gif = []
 
     def export_gif(self, data, output_file, cmap_type, fps=8):
         # Create figure and axis without displaying
