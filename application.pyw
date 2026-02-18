@@ -419,37 +419,6 @@ class App(ctk.CTk):
 
         self.canvas.draw_idle()
 
-
-    # def change_sensor(self, sensor_name):
-    #     rows, cols = SENSOR_PROFILES[sensor_name]
-
-    #     self.updating = False
-    #     self.scan_active = False
-    #     self.scan_step = 0
-
-    #     # self.data = np.zeros((rows, cols))
-    #     if self.serial_port and self.serial_port.is_open:
-    #         self.data = np.zeros((rows, cols))
-    #     else:
-    #         self.data = np.random.rand(rows, cols)  # demo mode
-    #     self.offset = np.zeros_like(self.data)
-    #     self.initFlag = True
-
-    #     # DO NOT clear figure or axes
-    #     self.img.set_data(self.data)
-    #     self.img.set_extent((-0.5, cols - 0.5, rows - 0.5, -0.5))
-
-    #     self.ax.set_xticks(range(cols))
-    #     self.ax.set_yticks(range(rows))
-    #     self.ax.set_xlim(-0.5, cols - 0.5)
-    #     self.ax.set_ylim(rows - 0.5, -0.5)
-
-    #     self.canvas.draw_idle()
-
-    #     self.scan_buffer = None
-    #     self.scan_steps = 0
-    #     self.scan_step = 0
-
     def change_acq_mode(self, mode):
         self.acq_mode = mode
 
@@ -479,22 +448,6 @@ class App(ctk.CTk):
             self.terminal.insert("end", "Snapshot requested\n")
         except Exception as e:
             print("Snapshot request failed:", e)
-
-    # def start_scan(self):
-    #     rows, cols = self.data.shape
-    #     self.scan_steps = int(self.scan_entry.get())
-
-    #     self.scan_step = 0
-    #     self.scan_buffer = np.zeros((rows, cols * self.scan_steps))
-    #     self.data = self.scan_buffer
-
-    #     self.img.set_data(self.data)
-    #     self.img.set_extent((-0.5, cols * self.scan_steps - 0.5, rows - 0.5, -0.5))
-    #     self.canvas.draw_idle()
-
-    #     print(f"Scan started: {rows}x{cols * self.scan_steps}")
-
-    #     self.scan_active = True
 
     def start_scan(self):
         # Only valid in SNAPSHOT mode
