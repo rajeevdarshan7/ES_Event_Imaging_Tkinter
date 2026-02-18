@@ -1,5 +1,6 @@
 import customtkinter as ctk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -11,8 +12,20 @@ import queue
 import time
 import os
 
-ROW_NUM = 6
-COL_NUM = 6
+DEFAULT_SENSOR = "ES Sensor 8x8"
+
+SENSOR_PROFILES = {
+    "X-Sensor 4x4": (4, 4),  # Additonal Sensor
+    "ES Sensor 1x1": (1, 1),
+    "ES Sensor 2x2": (2, 2),
+    "ES Sensor 3x3": (3, 3),
+    "ES Sensor 4x4": (4, 4),
+    "ES Sensor 6x6": (6, 6),
+    "ES Sensor 7x7": (7, 7),
+    "ES Sensor 8x8": (8, 8),
+    "ES Sensor 9x9": (9, 9),
+    "ES Sensor 10x10": (10,10)
+}
 
 # Set CustomTkinter appearance
 ctk.set_appearance_mode("System")
@@ -25,9 +38,10 @@ class App(ctk.CTk):
         # self.bind("<Map>", self.recover_window)
 
         # Initialize
+        rows, cols = SENSOR_PROFILES[DEFAULT_SENSOR]
+        self.data = np.random.rand(rows, cols)
         self.mode = "Normal"
         self.gain = 1 # to be passed into port
-        self.data = np.random.rand(ROW_NUM, COL_NUM) # Initial data (define sensor array dimension here)
         self.offset = np.zeros(self.data.shape)
         self.initFlag = True
         self.recording = False
@@ -39,6 +53,7 @@ class App(ctk.CTk):
         self.serial_event = Event()
         self.data_queue = queue.Queue()
         self.debug = False
+        self.cbar = None
 
         # Set minimum width and height for App
         minwidth = 835
@@ -108,22 +123,25 @@ class App(ctk.CTk):
         self.after(200, self.process_serial_data)
 
     def setup_plot(self):
-        # Create matplotlib figure
         self.fig = Figure(figsize=(7, 6), dpi=100)
         self.ax = self.fig.add_subplot(111)
-        
+
+        # Initial data
         self.img = self.ax.imshow(
             self.data,
             interpolation="nearest",
             cmap="plasma",
-            aspect="1.0",
-            clim=[0, 2] # may need to change accordingly of readings
+            aspect="equal",
+            vmin=0,
+            vmax=5
         )
-        for (i, j), z in np.ndenumerate(self.data):
-            self.ax.text(j, i, f"{z:.2f}", ha='center', va='center', size=12)
-        self.fig.colorbar(self.img, ax=self.ax)
-        
-        # Embed in CustomTkinter
+
+        # ---- FIXED COLORBAR AXIS ----
+        divider = make_axes_locatable(self.ax)
+        self.cax = divider.append_axes("right", size="5%", pad=0.1)
+
+        self.cbar = self.fig.colorbar(self.img, cax=self.cax)
+
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=12)
 
@@ -228,6 +246,17 @@ class App(ctk.CTk):
         self.speed_frame.grid(row=3, column=0, pady=5, padx=10)
         self.speed_slider.set(self.update_interval)
 
+        self.sensor_label = ctk.CTkLabel(self.panel_frame, text="Sensor Type:")
+        self.sensor_label.grid(row=9, column=0, pady=(10, 2))
+
+        self.sensor_select = ctk.CTkOptionMenu(
+            self.panel_frame,
+            values=list(SENSOR_PROFILES.keys()),
+            command=self.change_sensor
+        )
+        self.sensor_select.grid(row=10, column=0, pady=(2, 10))
+        self.sensor_select.set("ES Sensor 8x8")
+
         # Update gain slider
         self.gain_frame = ctk.CTkFrame(master=self.panel_frame)
         self.gain_frame.grid_columnconfigure(2, weight=2)
@@ -289,6 +318,30 @@ class App(ctk.CTk):
 
         # Dev: serial terminal
         self.setup_terminal()
+
+    def change_sensor(self, sensor_name):
+        rows, cols = SENSOR_PROFILES[sensor_name]
+
+        self.updating = False
+
+        # self.data = np.zeros((rows, cols))
+        if self.serial_port and self.serial_port.is_open:
+            self.data = np.zeros((rows, cols))
+        else:
+            self.data = np.random.rand(rows, cols)  # demo mode
+        self.offset = np.zeros_like(self.data)
+        self.initFlag = True
+
+        # DO NOT clear figure or axes
+        self.img.set_data(self.data)
+        self.img.set_extent((-0.5, cols - 0.5, rows - 0.5, -0.5))
+
+        self.ax.set_xticks(range(cols))
+        self.ax.set_yticks(range(rows))
+        self.ax.set_xlim(-0.5, cols - 0.5)
+        self.ax.set_ylim(rows - 0.5, -0.5)
+
+        self.canvas.draw_idle()
 
     def update_plot(self):
         if self.updating:
@@ -448,18 +501,26 @@ class App(ctk.CTk):
             else:
                 data = data.split(" ")
 
-                rowNum = ROW_NUM
-                colNum = COL_NUM
+                rowNum, colNum = self.data.shape
                 # print(data) # for debug purpose
+                # try:
+                #     data = np.array([float(i) for i in data[:(rowNum*colNum)]]).reshape(rowNum, colNum)
+                #     self.data = np.flip(data, axis=1)
+                #     if (self.initFlag):
+                #         self.offset = np.zeros(self.data.shape)
+                #         self.initFlag = False
+                # except Exception as e:
+                #     print("unknown error: ", e)
+                #     print(data)
                 try:
-                    data = np.array([float(i) for i in data[:(rowNum*colNum)]]).reshape(rowNum, colNum)
-                    self.data = np.flip(data, axis=1)
-                    if (self.initFlag):
-                        self.offset = np.zeros(self.data.shape)
+                    values = np.array([float(i) for i in data[:rowNum * colNum]])
+                    self.data = np.flip(values.reshape(rowNum, colNum), axis=1)
+
+                    if self.initFlag:
+                        self.offset = np.zeros_like(self.data)
                         self.initFlag = False
                 except Exception as e:
-                    print("unknown error: ", e)
-                    print(data)
+                    print("reshape error:", e)
                 
 
         self.after(200, self.process_serial_data)

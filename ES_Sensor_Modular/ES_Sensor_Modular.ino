@@ -26,7 +26,7 @@
    ================================================================ */
 
 #define NUM_ADC               2     // <<< change this (1..8)
-#define SNAPSHOT_MODE         1     // <<< 0 = loop forever, 1 = single capture
+#define SNAPSHOT_MODE         0     // <<< 0 = loop forever, 1 = single capture
 #define BOARD_RST_ACTIVE_HIGH 1     // <<< RESET INVERTED
 
 // -------------------- Data Bus --------------------
