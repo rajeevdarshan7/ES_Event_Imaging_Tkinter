@@ -251,7 +251,7 @@ class App(ctk.CTk):
             command=self.change_sensor
         )
         self.sensor_select.grid(row=10, column=0, pady=(2, 10))
-        self.sensor_select.set("EMI 6x6")
+        self.sensor_select.set("ES Sensor 6x6")
 
         # Update gain slider
         self.gain_frame = ctk.CTkFrame(master=self.panel_frame)
