@@ -29,7 +29,7 @@ SENSOR_PROFILES = {
 
 # Set CustomTkinter appearance
 ctk.set_appearance_mode("System")
-ctk.set_default_color_theme("themes/coffee.json")
+ctk.set_default_color_theme("themes/metal.json")
 
 class App(ctk.CTk):
     def __init__(self, update_interval=250):
