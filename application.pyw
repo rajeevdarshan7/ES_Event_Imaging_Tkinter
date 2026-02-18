@@ -54,6 +54,8 @@ class App(ctk.CTk):
         self.data_queue = queue.Queue()
         self.debug = False
         self.cbar = None
+        self.acq_mode = "VIDEO"
+        self.snapshot_pending = False
 
         # Set minimum width and height for App
         minwidth = 835
@@ -111,6 +113,16 @@ class App(ctk.CTk):
         self.debug_button = ctk.CTkButton(self, text = "Dev", font=("Arial", 20, "bold"), fg_color="#dd3b30", width=40, command = self.toggle_terminal)
         self.debug_button.place(x = 6, y = 150) 
 
+        self.snapshot_button = ctk.CTkButton(
+            self.panel_frame,
+            text="📸 Capture Snapshot",
+            command=self.capture_snapshot
+        )
+
+        # Initially hidden (VIDEO mode)
+        self.snapshot_button.grid(row=11, column=0, pady=(10, 10))
+        self.snapshot_button.grid_remove()
+
         # Initialize plot
         self.setup_plot()
         self.setup_controls()
@@ -120,7 +132,7 @@ class App(ctk.CTk):
         self.updating = False
 
         # check for serial
-        self.after(200, self.process_serial_data)
+        self.after(20, self.process_serial_data)
 
     def setup_plot(self):
         self.fig = Figure(figsize=(7, 6), dpi=100)
@@ -246,6 +258,18 @@ class App(ctk.CTk):
         self.speed_frame.grid(row=3, column=0, pady=5, padx=10)
         self.speed_slider.set(self.update_interval)
 
+        self.acq_label = ctk.CTkLabel(self.panel_frame, text="Acquisition Mode:")
+        self.acq_label.grid(row=7, column=0, pady=(10, 2))
+
+        self.acq_select = ctk.CTkOptionMenu(
+            self.panel_frame,
+            values=["VIDEO", "SNAPSHOT"],
+            command=self.change_acq_mode
+        )
+        self.acq_select.grid(row=8, column=0, pady=(2, 10))
+        self.acq_select.set("VIDEO")
+
+
         self.sensor_label = ctk.CTkLabel(self.panel_frame, text="Sensor Type:")
         self.sensor_label.grid(row=9, column=0, pady=(10, 2))
 
@@ -360,6 +384,36 @@ class App(ctk.CTk):
         self.ax.set_ylim(rows - 0.5, -0.5)
 
         self.canvas.draw_idle()
+
+    def change_acq_mode(self, mode):
+        self.acq_mode = mode
+
+        if mode == "VIDEO":
+            self.updating = True          # always live
+            self.update_interval = 1      # fastest UI refresh
+            self.speed_slider.set(1)
+            self.snapshot_pending = False
+            self.snapshot_button.grid_remove()
+        else:
+            self.updating = False         # wait for snapshot
+            self.snapshot_pending = False
+            self.snapshot_button.grid()
+
+    def capture_snapshot(self):
+        if not self.serial_port or not self.serial_port.is_open:
+            print("Serial not open — cannot capture snapshot")
+            return
+
+        # Arm snapshot
+        self.snapshot_pending = True
+        self.updating = False
+
+        # Ask Arduino for ONE frame
+        try:
+            self.serial_port.write(b"snapshot\n")
+            self.terminal.insert("end", "Snapshot requested\n")
+        except Exception as e:
+            print("Snapshot request failed:", e)
 
     def update_plot(self):
         if self.updating:
@@ -503,7 +557,7 @@ class App(ctk.CTk):
             except Exception as e:
                 self.data_queue.put(f"Error: {str(e)}\n")
 
-            time.sleep(0.005)
+            time.sleep(0.001)
 
 
     # May need to play around with this function
@@ -512,46 +566,89 @@ class App(ctk.CTk):
 
             data = self.data_queue.get()
 
-            if (not self.updating):
-                self.terminal.insert("end", data)
-                self.terminal.see("end")
+            # Always parse data in VIDEO mode
+            if self.acq_mode == "VIDEO":
+                self._parse_and_update(data)
 
-            else:
-                # data = data.split(" ")
-                parts = data.split("|")
+            # SNAPSHOT mode → parse ONCE, then stop
+            elif self.acq_mode == "SNAPSHOT" and not self.updating:
+                self._parse_and_update(data)
+                self.updating = True   # block further updates
 
-                sensor_values_str = parts[0].strip().split()
 
-                humidity = None
+            # if (not self.updating):
+            #     self.terminal.insert("end", data)
+            #     self.terminal.see("end")
 
-                for p in parts[1:]:
-                    p = p.strip()
+            # else:
+                # parts = data.split("|")
 
-                    if p.startswith("HUM="):
-                        try:
-                            humidity = float(p.split("=")[1])
-                        except ValueError:
-                            pass  # ignore malformed humidity
+                # sensor_values_str = parts[0].strip().split()
 
-                if humidity is not None:
-                    self.humidity_value.configure(text=f"Humidity: {humidity:.1f} %")
+                # humidity = None
 
-                rowNum, colNum = self.data.shape
-                try:
-                    # values = np.array([float(i) for i in data[:rowNum * colNum]])
-                    values = np.array(
-                        [float(v) for v in sensor_values_str[:rowNum * colNum]]
-                    )
+                # for p in parts[1:]:
+                #     p = p.strip()
 
-                    self.data = np.flip(values.reshape(rowNum, colNum), axis=1)
+                #     if p.startswith("HUM="):
+                #         try:
+                #             humidity = float(p.split("=")[1])
+                #         except ValueError:
+                #             pass  # ignore malformed humidity
 
-                    if self.initFlag:
-                        self.offset = np.zeros_like(self.data)
-                        self.initFlag = False
-                except Exception as e:
-                    print("reshape error:", e)
+                # if humidity is not None:
+                #     self.humidity_value.configure(text=f"Humidity: {humidity:.2f} %")
+
+                # rowNum, colNum = self.data.shape
+                # try:
+                #     # values = np.array([float(i) for i in data[:rowNum * colNum]])
+                #     values = np.array(
+                #         [float(v) for v in sensor_values_str[:rowNum * colNum]]
+                #     )
+
+                #     self.data = np.flip(values.reshape(rowNum, colNum), axis=1)
+
+                #     if self.initFlag:
+                #         self.offset = np.zeros_like(self.data)
+                #         self.initFlag = False
+                # except Exception as e:
+                #     print("reshape error:", e)
                 
-        self.after(200, self.process_serial_data)
+        self.after(20, self.process_serial_data)
+
+    def _parse_and_update(self, data):
+        parts = data.split("|")
+        sensor_values_str = parts[0].strip().split()
+
+        humidity = None
+        for p in parts[1:]:
+            p = p.strip()
+            if p.startswith("HUM="):
+                try:
+                    humidity = float(p.split("=")[1])
+                except ValueError:
+                    pass
+
+        if humidity is not None:
+            self.humidity_label.configure(text=f"{humidity:.2f} %")
+
+        rowNum, colNum = self.data.shape
+        try:
+            values = np.array(
+                [float(v) for v in sensor_values_str[:rowNum * colNum]]
+            )
+            self.data = np.flip(values.reshape(rowNum, colNum), axis=1)
+
+            self.img.set_data(self.data)
+            self.canvas.draw_idle()
+
+            if self.acq_mode == "SNAPSHOT" and self.snapshot_pending:
+                self.save_im()
+                self.snapshot_pending = False
+
+        except Exception as e:
+            print("parse error:", e)
+
 
     def send_serial_message(self):
         if self.serial_port and self.serial_port.is_open:
