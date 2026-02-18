@@ -15,7 +15,7 @@ import os
 DEFAULT_SENSOR = "ES Sensor 8x8"
 
 SENSOR_PROFILES = {
-    "X-Sensor 4x4": (4, 4),  # Additonal Sensor
+    "X-Sensor 4x4": (4, 4),  # Additional Sensor
     "ES Sensor 1x1": (1, 1),
     "ES Sensor 2x2": (2, 2),
     "ES Sensor 3x3": (3, 3),
@@ -281,6 +281,25 @@ class App(ctk.CTk):
         # self.gain_frame.grid(row=4, column=0, pady=5, padx=10)
         self.gain_slider.set(self.gain)
 
+        # -----------------------------
+        # Humidity display (right panel)
+        # -----------------------------
+        self.humidity_title = ctk.CTkLabel(
+            self.panel_frame,
+            text="Humidity",
+            font=("Arial", 14, "bold")
+        )
+        self.humidity_title.grid(row=11, column=0, pady=(15, 2))
+
+        self.humidity_value = ctk.CTkLabel(
+            self.panel_frame,
+            text="-- %",
+            font=("Arial", 20, "bold"),
+            text_color="#7CFC98"  # light green, optional
+        )
+        self.humidity_value.grid(row=12, column=0, pady=(0, 10))
+
+
         # Capture button
         self.capture_button = ctk.CTkButton(
             self.panel_frame,
@@ -499,21 +518,32 @@ class App(ctk.CTk):
                 self.terminal.see("end")
 
             else:
-                data = data.split(" ")
+                # data = data.split(" ")
+                parts = data.split("|")
+
+                sensor_values_str = parts[0].strip().split()
+
+                humidity = None
+
+                for p in parts[1:]:
+                    p = p.strip()
+
+                    if p.startswith("HUM="):
+                        try:
+                            humidity = float(p.split("=")[1])
+                        except ValueError:
+                            pass  # ignore malformed humidity
+
+                if humidity is not None:
+                    self.humidity_value.configure(text=f"{humidity:.1f} %")
 
                 rowNum, colNum = self.data.shape
-                # print(data) # for debug purpose
-                # try:
-                #     data = np.array([float(i) for i in data[:(rowNum*colNum)]]).reshape(rowNum, colNum)
-                #     self.data = np.flip(data, axis=1)
-                #     if (self.initFlag):
-                #         self.offset = np.zeros(self.data.shape)
-                #         self.initFlag = False
-                # except Exception as e:
-                #     print("unknown error: ", e)
-                #     print(data)
                 try:
-                    values = np.array([float(i) for i in data[:rowNum * colNum]])
+                    # values = np.array([float(i) for i in data[:rowNum * colNum]])
+                    values = np.array(
+                        [float(v) for v in sensor_values_str[:rowNum * colNum]]
+                    )
+
                     self.data = np.flip(values.reshape(rowNum, colNum), axis=1)
 
                     if self.initFlag:
@@ -522,7 +552,6 @@ class App(ctk.CTk):
                 except Exception as e:
                     print("reshape error:", e)
                 
-
         self.after(200, self.process_serial_data)
 
     def send_serial_message(self):
