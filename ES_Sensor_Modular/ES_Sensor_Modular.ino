@@ -69,10 +69,11 @@ uint16_t read_bus16() {
 }
 
 /* ================================================================
-   Voltage scaling: 0 → 3.3V (UNIPOLAR OUTPUT FORMAT)
+   Voltage scaling: -3.3V → 3.3V (BIPOLAR OUTPUT FORMAT)
    ================================================================ */
-float rawToVoltage33(uint16_t raw) {
-  return (raw * 3.3f) / 65535.0f;
+float rawToVoltageSigned(uint16_t raw) {
+  int16_t s = (int16_t)raw;          // preserve sign
+  return (s * 5.0f) / 32768.0f;      // ±5V range
 }
 
 // Placeholder (future sensor)
@@ -171,7 +172,7 @@ void loop() {
 
   for (int a = 0; a < NUM_ADC; a++) {
     for (int ch = 0; ch < 8; ch++) {
-      Serial.print(rawToVoltage33(raw[a][ch]), 4);
+      Serial.print(rawToVoltageSigned(raw[a][ch]), 4);
       Serial.print(" ");
     }
   }
