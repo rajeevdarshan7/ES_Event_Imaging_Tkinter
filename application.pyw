@@ -534,7 +534,7 @@ class App(ctk.CTk):
                             pass  # ignore malformed humidity
 
                 if humidity is not None:
-                    self.humidity_value.configure(text=f"{humidity:.1f} %")
+                    self.humidity_value.configure(text=f"Humidity: {humidity:.1f} %")
 
                 rowNum, colNum = self.data.shape
                 try:
