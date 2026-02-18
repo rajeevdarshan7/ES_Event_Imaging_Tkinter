@@ -12,14 +12,14 @@ import queue
 import time
 import os
 
-DEFAULT_SENSOR = "EMI 6x6"
+DEFAULT_SENSOR = "ES Sensor 6x6"
 
 SENSOR_PROFILES = {
-    "EMI 1x1": (1, 1),
-    "EMI 2x2": (2, 2),
-    "EMI 3x3": (3, 3),
-    "EMI 4x4": (4, 4),
-    "EMI 6x6": (6, 6),
+    "ES Sensor 1x1": (1, 1),
+    "ES Sensor 2x2": (2, 2),
+    "ES Sensor 3x3": (3, 3),
+    "ES Sensor 4x4": (4, 4),
+    "ES Sensor 6x6": (6, 6),
     "X-Sensor 4x4": (4, 4),  # unknown sensor, same shape
 }
 
@@ -118,26 +118,6 @@ class App(ctk.CTk):
         # check for serial
         self.after(200, self.process_serial_data)
 
-    # def setup_plot(self):
-    #     # Create matplotlib figure
-    #     self.fig = Figure(figsize=(7, 6), dpi=100)
-    #     self.ax = self.fig.add_subplot(111)
-        
-    #     self.img = self.ax.imshow(
-    #         self.data,
-    #         interpolation="nearest",
-    #         cmap="plasma",
-    #         aspect="1.0",
-    #         clim=[0, 2] # may need to change accordingly of readings
-    #     )
-    #     for (i, j), z in np.ndenumerate(self.data):
-    #         self.ax.text(j, i, f"{z:.2f}", ha='center', va='center', size=12)
-    #     # self.fig.colorbar(self.img, ax=self.ax)
-    #     self.cbar = self.fig.colorbar(self.img, ax=self.ax)
-        
-    #     # Embed in CustomTkinter
-    #     self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
-    #     self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=12)
     def setup_plot(self):
         self.fig = Figure(figsize=(7, 6), dpi=100)
         self.ax = self.fig.add_subplot(111)
@@ -335,47 +315,16 @@ class App(ctk.CTk):
         # Dev: serial terminal
         self.setup_terminal()
 
-    # def change_sensor(self, sensor_name):
-    #     rows, cols = SENSOR_PROFILES[sensor_name]
-
-    #     # Pause updates
-    #     self.updating = False
-
-    #     # Reset data
-    #     self.data = np.zeros((rows, cols))
-    #     self.offset = np.zeros_like(self.data)
-    #     self.initFlag = True
-
-    #     # Clear main axis
-    #     self.ax.clear()
-
-    #     # SAFELY remove colorbar
-    #     try:
-    #         if self.cbar is not None:
-    #             self.cbar.ax.remove()
-    #             self.cbar = None
-    #     except Exception:
-    #         self.cbar = None
-
-    #     # Recreate heatmap
-    #     self.img = self.ax.imshow(
-    #         self.data,
-    #         interpolation="nearest",
-    #         cmap="plasma",
-    #         aspect="1.0",
-    #         clim=[0, 5]
-    #     )
-
-    #     # Create ONE new colorbar
-    #     self.cbar = self.fig.colorbar(self.img, ax=self.ax)
-
-    #     self.canvas.draw_idle()
     def change_sensor(self, sensor_name):
         rows, cols = SENSOR_PROFILES[sensor_name]
 
         self.updating = False
 
-        self.data = np.zeros((rows, cols))
+        # self.data = np.zeros((rows, cols))
+        if self.serial_port and self.serial_port.is_open:
+            self.data = np.zeros((rows, cols))
+        else:
+            self.data = np.random.rand(rows, cols)  # demo mode
         self.offset = np.zeros_like(self.data)
         self.initFlag = True
 
