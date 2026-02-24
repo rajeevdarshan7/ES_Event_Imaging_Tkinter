@@ -561,24 +561,27 @@ class App(ctk.CTk):
         self.canvas.draw_idle()
         self.update_controls_ui()
 
-        # Trigger first snapshot
-        if self.serial_port and self.serial_port.is_open:
-            self.serial_port.write(b"snapshot\n")
+        self.snapshot_pending = False
 
     def scan_next(self):
         if not self.scan_active:
             return
 
+        # If already finished, clean up
         if self.scan_y_step >= self.scan_y_steps:
             self.scan_active = False
             self.ui_state = "READY"
             self.update_controls_ui()
             return
 
+        # Arm snapshot save logic (only save after full raster)
         self.snapshot_pending = True
 
+        # Request ONE frame from Arduino
         if self.serial_port and self.serial_port.is_open:
             self.serial_port.write(b"snapshot\n")
+        else:
+            print("Serial not open")
 
 
     def stop_all(self):
@@ -676,14 +679,40 @@ class App(ctk.CTk):
             self.serial_port = None
 
     def close_serial_port(self):
+        # Stop background thread + close port safely
         if self.serial_port and self.serial_port.is_open:
             self.serial_event.set()
-            self.serial_port.close()
-            self.serial_thread.join()
+            try:
+                self.serial_port.close()
+            except Exception:
+                pass
+
+            # join only if thread exists + is alive
+            if self.serial_thread and self.serial_thread.is_alive():
+                self.serial_thread.join(timeout=1)
 
         self.serial_port = None
+        self.serial_thread = None
+        self.serial_event.clear()  # ready for next open
+
+        # Re-enable UI controls
+        self.connect_btn.configure(text="Open Port")
+        self.port_option.configure(state="normal")
+        self.baud_option.configure(state="normal")
+        self.refresh_btn.configure(state="normal")
+
+        # Optional: refresh port list so user can pick a new one immediately
+        self.refresh_ports()
+
+        # Reset UI state
         self.ui_state = "READY"
         self.update_controls_ui()
+
+        # Optional logging
+        try:
+            self.terminal.insert("end", "Port closed\n")
+        except Exception:
+            pass
 
     def read_serial_data(self):
         buffer = ""
