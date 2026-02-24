@@ -721,7 +721,6 @@ class App(ctk.CTk):
 
         rows, cols = self.sensor_rows, self.sensor_cols
         expected = rows * cols
-
         if len(values_str) < expected:
             return
 
@@ -729,19 +728,30 @@ class App(ctk.CTk):
         frame = np.flip(values.reshape(rows, cols), axis=1)
 
         if self.scan_active:
-            r0 = self.scan_y_step * rows
-            c0 = self.scan_x_step * cols
 
-            self.scan_buffer[r0:r0+rows, c0:c0+cols] = frame
-            self.img.set_array(self.scan_buffer)
+            # HARD STOP
+            if self.scan_y_step >= self.scan_y_steps:
+                self.scan_active = False
+                self.ui_state = "READY"
+                self.update_controls_ui()
+                return
 
-            # Advance raster
+            # === TRUE 2D INTERLEAVING ===
+            for r in range(rows):
+                target_row = r * self.scan_y_steps + self.scan_y_step
+                for c in range(cols):
+                    target_col = c * self.scan_x_steps + self.scan_x_step
+                    self.scan_buffer[target_row, target_col] = frame[r, c]
+
+            # Advance X first (fast axis)
             self.scan_x_step += 1
             if self.scan_x_step >= self.scan_x_steps:
                 self.scan_x_step = 0
                 self.scan_y_step += 1
 
-            # End of full raster
+            self.img.set_array(self.scan_buffer)
+
+            # Finish scan
             if self.scan_y_step >= self.scan_y_steps:
                 self.scan_active = False
                 self.ui_state = "READY"
