@@ -152,24 +152,25 @@ class App(ctk.CTk):
         self.fig = Figure(figsize=(7, 6), dpi=100)
         self.ax = self.fig.add_subplot(111)
 
-        # Initial data
         self.img = self.ax.imshow(
             self.data,
             interpolation="nearest",
             cmap="plasma",
             aspect="equal",
             vmin=0,
-            vmax=5
+            vmax=3.3
         )
 
-        # ---- FIXED COLORBAR AXIS ----
+        # White for unfilled (NaN) cells
+        self.img.cmap.set_bad(color="white")
+
         divider = make_axes_locatable(self.ax)
         self.cax = divider.append_axes("right", size="5%", pad=0.1)
-
         self.cbar = self.fig.colorbar(self.img, cax=self.cax)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=12)
+
 
     def setup_serial_controls(self):
         # Serial port controls
@@ -439,7 +440,7 @@ class App(ctk.CTk):
         self.scan_y_step = 0
         self.scan_buffer = None
 
-        self.data = np.zeros((rows, cols))
+        self.data = np.full((rows, cols), np.nan)
         self.offset = np.zeros_like(self.data)
 
         self.img.set_array(self.data)
@@ -537,12 +538,18 @@ class App(ctk.CTk):
         self.scan_x_step = 0
         self.scan_y_step = 0
         self.scan_active = True
+        self.snapshot_pending = True
         self.ui_state = "SCANNING"
 
         total_rows = rows * self.scan_y_steps
         total_cols = cols * self.scan_x_steps
 
-        self.scan_buffer = np.zeros((total_rows, total_cols))
+        # White (NaN) buffer until filled
+        self.scan_buffer = np.full(
+            (total_rows, total_cols),
+            np.nan,
+            dtype=float
+        )
         self.data = self.scan_buffer
 
         # Rebind image
@@ -555,7 +562,6 @@ class App(ctk.CTk):
         self.update_controls_ui()
 
         # Trigger first snapshot
-        self.snapshot_pending = True
         if self.serial_port and self.serial_port.is_open:
             self.serial_port.write(b"snapshot\n")
 
@@ -573,6 +579,7 @@ class App(ctk.CTk):
 
         if self.serial_port and self.serial_port.is_open:
             self.serial_port.write(b"snapshot\n")
+
 
     def stop_all(self):
         # Stop acquisition
@@ -595,39 +602,30 @@ class App(ctk.CTk):
         self.update_controls_ui()
 
     def update_plot(self):
-        if self.updating:
+        if not self.updating:
+            return
 
-            # Update plot
-            if (self.mode == "Normal" or self.mode == "Color"):
-                if (self.recording):
-                    self.tmp_gif.append(self.data + self.offset)
+        self.img.set_data(self.data + self.offset)
+        self.img.set(clim=[0, 3.3])
 
-                self.img.set_data(self.data + self.offset)
-                self.img.set(clim=[0, 3.3])
-                self.canvas.draw()
-                for t in list(self.ax.texts):
-                    t.remove()
-                for (i, j), z in np.ndenumerate(self.data + self.offset):
-                    self.ax.text(j, i, f"{z:.2f}", ha='center', va='center', size=12)
-            else:
-                # functions of thesholding and ESD Capture
-                tmp = (self.data + self.offset) > self.threshold
+        # Clear old text
+        for t in self.ax.texts:
+            t.remove()
 
-                if (self.mode == "ESD Capture"):
-                    # add capture function here for ESD capture.
-                    if (True):
-                        self.capture()
-                        print("ESD Capture Invoked.")
+        # Draw voltage text
+        for (i, j), z in np.ndenumerate(self.data + self.offset):
+            if not np.isnan(z):
+                self.ax.text(
+                    j, i,
+                    f"{z:.2f}",
+                    ha="center",
+                    va="center",
+                    fontsize=10,
+                    color="black"
+                )
 
-                self.img.set_data(tmp)
-                self.img.set(clim=[0, 1])
-                self.canvas.draw()
-                self.ax.texts.clear()
-                for (i, j), z in np.ndenumerate(self.data):
-                    self.ax.text(j, i, f"{z:.2f}", ha='center', va='center', size=12)
-            
-            # Schedule next update
-            self.after(self.update_interval, self.update_plot)
+        self.canvas.draw_idle()
+        self.after(self.update_interval, self.update_plot)
 
     def get_available_ports(self):
         ports = serial.tools.list_ports.comports()
@@ -717,25 +715,24 @@ class App(ctk.CTk):
 
             time.sleep(0.001)
 
-
     def _parse_and_update(self, data):
         parts = data.split("|")
         values_str = parts[0].strip().split()
 
-        rowNum, colNum = self.sensor_rows, self.sensor_cols
-        expected = rowNum * colNum
+        rows, cols = self.sensor_rows, self.sensor_cols
+        expected = rows * cols
 
         if len(values_str) < expected:
             return
 
         values = np.array([float(v) for v in values_str[:expected]])
-        frame = np.flip(values.reshape(rowNum, colNum), axis=1)
+        frame = np.flip(values.reshape(rows, cols), axis=1)
 
         if self.scan_active:
-            r0 = self.scan_y_step * rowNum
-            c0 = self.scan_x_step * colNum
+            r0 = self.scan_y_step * rows
+            c0 = self.scan_x_step * cols
 
-            self.scan_buffer[r0:r0+rowNum, c0:c0+colNum] = frame
+            self.scan_buffer[r0:r0+rows, c0:c0+cols] = frame
             self.img.set_array(self.scan_buffer)
 
             # Advance raster
@@ -744,7 +741,7 @@ class App(ctk.CTk):
                 self.scan_x_step = 0
                 self.scan_y_step += 1
 
-            # Finish raster
+            # End of full raster
             if self.scan_y_step >= self.scan_y_steps:
                 self.scan_active = False
                 self.ui_state = "READY"
@@ -756,7 +753,7 @@ class App(ctk.CTk):
 
         self.canvas.draw_idle()
 
-        # SAVE ONLY AFTER FULL RASTER
+        # Save ONLY after full raster
         if self.acq_mode == "SNAPSHOT" and not self.scan_active and self.snapshot_pending:
             self.save_im()
             self.snapshot_pending = False
