@@ -122,7 +122,7 @@ void acquire_and_send_frame() {
   for (int a = 0; a < NUM_ADC && printed < output_count; a++) {
     for (int ch = 0; ch < 8 && printed < output_count; ch++) {
       Serial.print(rawToVoltageSigned(raw[a][ch]), 4);
-      Serial.print(" ");
+    Serial.print(" ");
       printed++;
     }
   }
