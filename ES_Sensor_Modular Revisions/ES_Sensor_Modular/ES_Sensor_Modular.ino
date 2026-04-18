@@ -4,7 +4,7 @@
    AD7606 MULTI-ADC PARALLEL - ARDUINO GIGA
    ================================================================ */
 
-#define NUM_ADC               2
+#define NUM_ADC               5
 #define SNAPSHOT_MODE         0
 #define BOARD_RST_ACTIVE_HIGH 1
 
@@ -49,10 +49,18 @@ void ad7606_reset() {
   delay(10);
 }
 
+// static inline void trigger_conversion_sync() {
+//   digitalWrite(PIN_CVA, LOW);
+//   delayMicroseconds(2);
+//   digitalWrite(PIN_CVA, HIGH);
+// }
+
 static inline void trigger_conversion_sync() {
   digitalWrite(PIN_CVA, LOW);
+  digitalWrite(PIN_CVB, LOW);
   delayMicroseconds(2);
   digitalWrite(PIN_CVA, HIGH);
+  digitalWrite(PIN_CVB, HIGH);
 }
 
 uint16_t read_bus16() {

@@ -725,7 +725,7 @@ class App(ctk.CTk):
                     buffer += char
 
                     # Prevent runaway buffer
-                    if len(buffer) > 4096:
+                    if len(buffer) > 20000:
                         buffer = ""
 
                     # Look for a complete frame < ... >
