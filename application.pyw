@@ -1,3 +1,17 @@
+"""Electrostatic Event Imaging GUI.
+
+Key design points
+-----------------
+* Serial reception runs in a background thread and passes complete frames to Tk
+  through a thread-safe queue.
+* ``update_controls_ui`` is the only function responsible for showing or hiding
+  state-dependent action buttons.
+* ``render_current_frame`` is the only function responsible for applying tare,
+  visualization mode, colour limits and numerical overlays.
+* GIF recording stores a copy of each received frame and exports it through
+  Matplotlib's Pillow writer.
+"""
+
 import customtkinter as ctk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -11,6 +25,7 @@ from threading import Thread, Event
 import queue
 import time
 import os
+from datetime import datetime
 
 DEFAULT_SENSOR = "ES Sensor 8x8"
 
@@ -50,6 +65,9 @@ class App(ctk.CTk):
         self.initFlag = True
         self.recording = False
         self.tmp_gif = []
+        self.record_fps = 8
+        self.tare_active = False
+        self.update_job = None
         self.update_interval = update_interval
         self.title("Electrostatic Event Imaging Sensor")
         self.serial_port = None
@@ -73,14 +91,14 @@ class App(ctk.CTk):
         self.minsize(minwidth, minheight)
         
         # Configure grid layout
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
         # Create main container frame
         self.main_frame = ctk.CTkFrame(self, corner_radius=0)
-        self.main_frame.grid(row=0, column=0)
+        self.main_frame.grid(row=0, column=0, sticky="nsew")
         self.main_frame.grid_columnconfigure(1, weight=2, minsize=290)
-        self.main_frame.grid_rowconfigure(1, weight=1)
+        self.main_frame.grid_rowconfigure(0, weight=1)
 
         # Create plot frame (left side)
         self.plot_frame = ctk.CTkFrame(master=self.main_frame)
@@ -122,16 +140,6 @@ class App(ctk.CTk):
         # Debug Button
         self.debug_button = ctk.CTkButton(self, text = "Dev", font=("Arial", 20, "bold"), fg_color="#dd3b30", width=40, command = self.toggle_terminal)
         self.debug_button.place(x = 6, y = 150) 
-
-        self.snapshot_button = ctk.CTkButton(
-            self.panel_frame,
-            text="📸 Capture Snapshot",
-            command=self.capture_snapshot
-        )
-
-        # Initially hidden (VIDEO mode)
-        self.snapshot_button.grid(row=11, column=0, pady=(10, 10))
-        self.snapshot_button.grid_remove()
 
         # Initialize plot
         self.setup_plot()
@@ -296,7 +304,7 @@ class App(ctk.CTk):
         self.speed_slider = ctk.CTkSlider(
             self.speed_frame,
             from_=2000,
-            to=250,
+            to=33,
             number_of_steps=50,
             command=self.update_speed
         )
@@ -442,16 +450,23 @@ class App(ctk.CTk):
 
         self.data = np.full((rows, cols), np.nan)
         self.offset = np.zeros_like(self.data)
+        self.tare_active = False
 
         self.img.set_array(self.data)
         self.img.set_extent((-0.5, cols - 0.5, rows - 0.5, -0.5))
         self.ax.set_xlim(-0.5, cols - 0.5)
         self.ax.set_ylim(rows - 0.5, -0.5)
 
-        self.canvas.draw_idle()
+        self.render_current_frame()
+        self.update_controls_ui()
 
     def update_controls_ui(self):
-        widgets = [
+        """Render all state-dependent controls from one source of truth.
+
+        No other method should manually move action buttons with ``grid()``.
+        Methods update state flags, then call this function.
+        """
+        managed_widgets = [
             self.scan_label,
             self.scan_entry_x,
             self.scan_entry_y,
@@ -461,41 +476,58 @@ class App(ctk.CTk):
             self.record_button,
             self.tare_button,
             self.reset_button,
+            self.save_button,
             self.stop_button,
         ]
+        for widget in managed_widgets:
+            widget.grid_remove()
 
-        for w in widgets:
-            w.grid_remove()
+        ready = self.ui_state in ("IDLE", "READY")
+        active = self.ui_state in ("RUNNING", "SCANNING")
+        self._set_config_controls_state(ready)
+        self.speed_slider.configure(state="disabled" if active and self.recording else "normal")
 
-        # ----------------------------
-        # IDLE / READY
-        # ----------------------------
-        if self.ui_state in ("IDLE", "READY"):
-            self._set_config_controls_state(True)
-
-            self.scan_start_btn.grid()
-
-            if self.acq_mode == "SNAPSHOT":
+        if ready:
+            if self.acq_mode == "VIDEO":
+                self.scan_start_btn.configure(text="Start Video", command=self.start_scan)
+                self.scan_start_btn.grid()
+            else:
                 self.scan_label.grid()
                 self.scan_entry_x.grid()
                 self.scan_entry_y.grid()
+                self.scan_start_btn.configure(text="Start Scan", command=self.start_scan)
+                self.scan_start_btn.grid()
+                self.capture_button.configure(text="Capture Snapshot", command=self.capture_snapshot)
+                self.capture_button.grid()
 
-        # ----------------------------
-        # RUNNING / SCANNING
-        # ----------------------------
-        elif self.ui_state in ("RUNNING", "SCANNING"):
-            self._set_config_controls_state(False)
+            self.save_button.grid()
+            return
 
-            self.capture_button.grid()
-            self.record_button.grid()
-            self.tare_button.grid()
-            self.reset_button.grid()
-            self.stop_button.grid()
-
-            if self.ui_state == "SCANNING":
+        if active:
+            if self.acq_mode == "VIDEO":
+                self.capture_button.configure(
+                    text="Pause Video" if self.updating else "Resume Video",
+                    command=self.capture,
+                )
+                self.capture_button.grid()
+                self.record_button.configure(
+                    text="Stop Recording" if self.recording else "Record GIF",
+                    command=self.stop_record if self.recording else self.record,
+                )
+                self.record_button.grid()
+            elif self.ui_state == "SCANNING":
                 self.scan_next_btn.grid()
 
+            if self.tare_active:
+                self.reset_button.grid()
+            else:
+                self.tare_button.grid()
+
+            self.save_button.grid()
+            self.stop_button.grid()
+
     def change_acq_mode(self, mode):
+        self.stop_acquisition(reset_interval=False)
         self.acq_mode = mode
         self.ui_state = "READY"
         self.update_controls_ui()
@@ -521,7 +553,11 @@ class App(ctk.CTk):
         cols = self.sensor_cols
 
         if self.acq_mode != "SNAPSHOT":
+            self.updating = True
             self.ui_state = "RUNNING"
+            if self.serial_port and self.serial_port.is_open:
+                self.serial_port.write(b"start\n")
+            self.schedule_plot_update(immediate=True)
             self.update_controls_ui()
             return
 
@@ -558,9 +594,8 @@ class App(ctk.CTk):
         self.ax.set_xlim(-0.5, total_cols - 0.5)
         self.ax.set_ylim(total_rows - 0.5, -0.5)
 
-        self.canvas.draw_idle()
+        self.render_current_frame()
         self.update_controls_ui()
-
         self.snapshot_pending = False
 
     def scan_next(self):
@@ -584,51 +619,90 @@ class App(ctk.CTk):
             print("Serial not open")
 
 
-    def stop_all(self):
-        # Stop acquisition
+    def stop_acquisition(self, reset_interval=True):
+        """Stop video, recording and scan activity without closing serial."""
         self.updating = False
         self.recording = False
         self.scan_active = False
-        self.scan_started = False
         self.snapshot_pending = False
+        if self.update_job is not None:
+            try:
+                self.after_cancel(self.update_job)
+            except Exception:
+                pass
+            self.update_job = None
+        if reset_interval:
+            self.update_interval = 250
+            self.speed_slider.set(250)
+            self.speed_value_slider.configure(text="250ms")
 
-        # Restore defaults
-        self.update_interval = 250
-        self.speed_slider.set(250)
-        self.speed_value_slider.configure(text="250ms")
-
-        # Reset buttons
-        self.record_button.configure(text="Record", command=self.record)
-
-        # Reset UI
+    def stop_all(self):
+        self.stop_acquisition(reset_interval=True)
         self.ui_state = "READY"
         self.update_controls_ui()
 
-    def update_plot(self):
-        if not self.updating:
-            return
+    def _display_data(self):
+        """Return the data currently intended for display."""
+        display = self.data + self.offset
+        if self.mode in ("Threshold", "ESD Capture"):
+            return display > self.threshold
+        return display
 
-        self.img.set_data(self.data + self.offset)
-        self.img.set(clim=[0, 3.3])
+    def render_current_frame(self):
+        """Render the current frame consistently for every acquisition mode."""
+        display = self._display_data()
+        self.img.set_data(display)
 
-        # Clear old text
-        for t in self.ax.texts:
-            t.remove()
+        if self.mode == "Normal":
+            self.img.set_cmap("plasma")
+            self.img.set_clim(0, 3.3)
+        elif self.mode == "Color":
+            self.img.set_cmap("gist_rainbow")
+            self.img.set_clim(0, 3.3)
+        else:
+            self.img.set_cmap("gray")
+            self.img.set_clim(0, 1)
 
-        # Draw voltage text
-        for (i, j), z in np.ndenumerate(self.data + self.offset):
-            if not np.isnan(z):
+        for text_artist in list(self.ax.texts):
+            text_artist.remove()
+
+        # Keep overlays tied to physical values, not threshold booleans.
+        physical_values = self.data + self.offset
+        for (row, col), value in np.ndenumerate(physical_values):
+            if not np.isnan(value):
                 self.ax.text(
-                    j, i,
-                    f"{z:.2f}",
+                    col,
+                    row,
+                    f"{value:.2f}",
                     ha="center",
                     va="center",
                     fontsize=10,
-                    color="black"
+                    color="black",
                 )
 
         self.canvas.draw_idle()
-        self.after(self.update_interval, self.update_plot)
+
+    def schedule_plot_update(self, immediate=False):
+        """Maintain exactly one scheduled video-refresh callback."""
+        if self.update_job is not None:
+            try:
+                self.after_cancel(self.update_job)
+            except Exception:
+                pass
+            self.update_job = None
+        if not self.updating:
+            return
+        if immediate:
+            self.update_plot()
+        else:
+            self.update_job = self.after(self.update_interval, self.update_plot)
+
+    def update_plot(self):
+        self.update_job = None
+        if not self.updating:
+            return
+        self.render_current_frame()
+        self.schedule_plot_update()
 
     def get_available_ports(self):
         ports = serial.tools.list_ports.comports()
@@ -665,7 +739,7 @@ class App(ctk.CTk):
             )
             time.sleep(1)
             self.serial_event.clear()
-            self.serial_thread = Thread(target=self.read_serial_data)
+            self.serial_thread = Thread(target=self.read_serial_data, daemon=True)
             self.serial_thread.start()
             
             self.connect_btn.configure(text="Close Port")
@@ -729,15 +803,17 @@ class App(ctk.CTk):
                         buffer = ""
 
                     # Look for a complete frame < ... >
-                    while '<' in buffer and '>' in buffer:
+                    while '<' in buffer:
                         start = buffer.find('<')
-                        end   = buffer.find('>')
+                        end = buffer.find('>', start + 1)
+                        if end == -1:
+                            # Preserve the incomplete frame for the next read.
+                            buffer = buffer[start:]
+                            break
 
-                        frame = buffer[start + 1:end]   # strip < >
-                        buffer = buffer[end + 1:]       # consume buffer
-
-                        # NO checksum, push raw payload
-                        self.data_queue.put(frame.strip() + "\n")
+                        frame = buffer[start + 1:end]
+                        buffer = buffer[end + 1:]
+                        self.data_queue.put(frame.strip())
 
             except Exception as e:
                 self.data_queue.put(f"Error: {str(e)}\n")
@@ -745,15 +821,32 @@ class App(ctk.CTk):
             time.sleep(0.001)
 
     def _parse_and_update(self, data):
-        parts = data.split("|")
+        if data.startswith("Error:"):
+            print(data)
+            return
+
+        parts = data.split("|", maxsplit=1)
         values_str = parts[0].strip().split()
 
         rows, cols = self.sensor_rows, self.sensor_cols
         expected = rows * cols
         if len(values_str) < expected:
+            print(f"Discarded short frame: expected {expected}, got {len(values_str)}")
             return
 
-        values = np.array([float(v) for v in values_str[:expected]])
+        try:
+            values = np.array([float(v) for v in values_str[:expected]], dtype=float)
+        except ValueError as exc:
+            print(f"Discarded invalid numeric frame: {exc}")
+            return
+
+        if len(parts) == 2:
+            try:
+                humidity = float(parts[1].strip().split()[0])
+                self.humidity_label.configure(text=f"Humidity: {humidity:.2f} %")
+            except (ValueError, IndexError):
+                pass
+
         frame = np.flip(values.reshape(rows, cols), axis=1)
 
         if self.scan_active:
@@ -790,7 +883,11 @@ class App(ctk.CTk):
             self.data = frame
             self.img.set_array(self.data)
 
-        self.canvas.draw_idle()
+        self.render_current_frame()
+
+        # Store one immutable copy per received frame while recording.
+        if self.recording and not self.scan_active:
+            self.tmp_gif.append(np.array(self.data + self.offset, copy=True))
 
         # Save ONLY after full raster
         if self.acq_mode == "SNAPSHOT" and not self.scan_active and self.snapshot_pending:
@@ -798,14 +895,17 @@ class App(ctk.CTk):
             self.snapshot_pending = False
 
     def process_serial_data(self):
-        latest = None
+        frames = []
         while not self.data_queue.empty():
-            latest = self.data_queue.get()
+            frames.append(self.data_queue.get())
 
-        if latest:
-            self._parse_and_update(latest)
+        if frames:
+            # Preserve every frame during recording; otherwise display only the newest.
+            selected = frames if self.recording else [frames[-1]]
+            for frame in selected:
+                self._parse_and_update(frame)
 
-        self.after(100, self.process_serial_data)
+        self.after(50, self.process_serial_data)
 
     def send_serial_message(self):
         if self.serial_port and self.serial_port.is_open:
@@ -824,140 +924,110 @@ class App(ctk.CTk):
         self.terminal.delete("1.0", "end")
 
     def on_closing(self):
+        self.stop_acquisition(reset_interval=False)
         self.close_serial_port()
         self.destroy()
 
     def update_mode(self, mode):
-        # update mode here
-        if (mode == "Normal"):
-            self.mode = "Normal"
-            self.img.set_cmap("plasma")
-            self.img.set_data(self.data)
-            self.img.set(clim=[0, 3.3]) # may need to change accordingly of readings
-            self.canvas.draw()
-        elif (mode == "Color"):
-            self.mode = "Color"
-            self.img.set_cmap("gist_rainbow")
-            self.img.set_data(self.data)
-            self.img.set(clim=[0, 3.3]) # may need to change accordingly of readings
-            self.canvas.draw()
-        elif (mode == "Threshold"):
-            self.mode = "Threshold"
-            self.threshold = 1.5   # Change threshold here.
-            self.img.set_cmap("gray")
-            self.img.set_data(self.data[:,:] > self.threshold)
-            self.img.set(clim=[0, 1])
-            self.canvas.draw()
-        elif (mode == "ESD Capture"):
-            self.mode = "ESD Capture"
-            self.threshold = 3.2 # Change threshold here.
-            self.img.set_cmap("gray")
-            self.img.set_data(self.data[:,:] > self.threshold)
-            self.img.set(clim=[0, 1])
-            self.canvas.draw()
+        self.mode = mode
+        if mode == "Threshold":
+            self.threshold = 1.5
+        elif mode == "ESD Capture":
+            self.threshold = 3.2
+        self.render_current_frame()
 
     def capture(self):
         if self.acq_mode != "VIDEO":
             return
 
         self.updating = not self.updating
-
         if self.updating:
             self.ui_state = "RUNNING"
             if self.serial_port and self.serial_port.is_open:
-                self.serial_port.write(b"start")
-            self.update_plot()
+                self.serial_port.write(b"start\n")
+            self.schedule_plot_update(immediate=True)
         else:
-            self.ui_state = "READY"
-
+            if self.update_job is not None:
+                try:
+                    self.after_cancel(self.update_job)
+                except Exception:
+                    pass
+                self.update_job = None
+            self.ui_state = "RUNNING"  # Paused, but still in the active session.
         self.update_controls_ui()
 
+    def _next_capture_filename(self, suffix):
+        capture_dir = os.path.join(BASE_DIR, "Captured")
+        os.makedirs(capture_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        return os.path.join(capture_dir, f"capture_{timestamp}{suffix}")
+
     def save_im(self):
-        os.makedirs("./Captured", exist_ok=True)
-        idx = len(os.listdir("./Captured"))
-        self.fig.savefig(f"./Captured/{idx}.png")
+        output_file = self._next_capture_filename(".png")
+        self.fig.savefig(output_file)
+        print(f"Saved image: {output_file}")
+        return output_file
     
     def tare(self):
-        self.offset = -self.data
+        self.offset = -np.array(self.data, copy=True)
+        self.tare_active = True
+        self.render_current_frame()
+        self.update_controls_ui()
 
-        self.tare_button.grid_remove()
-        self.reset_button.grid(row=15, column=0, pady=5)
-
-        self.img.set_data(self.data + self.offset)
-        self.canvas.draw()
-        
     def rst(self):
         self.offset = np.zeros_like(self.data)
-
-        self.reset_button.grid_remove()
-        self.tare_button.grid(row=14, column=0, pady=5)
-
-        self.img.set_data(self.data)
-        self.canvas.draw()
+        self.tare_active = False
+        self.render_current_frame()
+        self.update_controls_ui()
 
     def update_gain(self, gain):
-        # update gain factor
-        self.gain = gain
-        self.gain_value_slider.configure(text=f"{round(self.gain, 2):.2f}")
+        """Retained as an integration hook for future hardware gain control."""
+        self.gain = float(gain)
 
     def update_speed(self, value):
         self.update_interval = int(value)
         self.speed_value_slider.configure(text=f"{self.update_interval}ms")
     
     def record(self):
-        if self.recording:
-            return  # already recording, do nothing
+        """Begin collecting each received video frame for GIF export."""
+        if self.recording or self.acq_mode != "VIDEO":
+            return
 
         self.recording = True
         self.tmp_gif = []
-
-        # Button state
-        self.record_button.configure(
-            text="Stop Recording",
-            command=self.stop_record
-        )
-
-        # Disable config controls (NOT hide)
-        self.speed_slider.configure(state="disabled")
-        self.gain_slider.configure(state="disabled")
-
-        # Fast update
-        self.update_interval = 33
-        self.speed_slider.set(1)
-        self.speed_value_slider.configure(text="1ms")
+        if not self.updating:
+            self.updating = True
+            self.ui_state = "RUNNING"
+            if self.serial_port and self.serial_port.is_open:
+                self.serial_port.write(b"start\n")
+            self.schedule_plot_update(immediate=True)
+        self.update_controls_ui()
 
     def stop_record(self):
+        """Stop recording and export the collected frames as a GIF."""
         if not self.recording:
             return
 
         self.recording = False
+        frames = self.tmp_gif
+        self.tmp_gif = []
+        self.update_controls_ui()
 
-        # Restore button
-        self.record_button.configure(
-            text="Record",
-            command=self.record
-        )
-
-        # Restore controls
-        self.speed_slider.configure(state="normal")
-        self.gain_slider.configure(state="normal")
-
-        self.update_interval = 250
-        self.speed_slider.set(250)
-        self.speed_value_slider.configure(text="250ms")
-
-        # 🚨 Guard: nothing recorded
-        if not self.tmp_gif:
-            print("No frames recorded — skipping GIF export")
+        if not frames:
+            print("No frames recorded — GIF export skipped")
             return
 
-        self.export_gif(
-            data=self.tmp_gif,
-            cmap_type=self.img.get_cmap(),
-            output_file=self._next_capture_filename(".gif")
-        )
-
-        self.tmp_gif = []
+        output_file = self._next_capture_filename(".gif")
+        try:
+            self.export_gif(
+                data=frames,
+                cmap_type=self.img.get_cmap(),
+                output_file=output_file,
+                fps=self.record_fps,
+            )
+            print(f"Saved GIF: {output_file}")
+        except Exception as exc:
+            print(f"GIF export failed: {exc}")
 
     def export_gif(self, data, output_file, cmap_type, fps=8):
         # Create figure and axis without displaying
@@ -967,11 +1037,19 @@ class App(ctk.CTk):
         ax.axis('off')
         
         # Initialize image plot
-        img = ax.imshow(data[0], cmap=cmap_type, aspect='auto', origin='lower')
+        first = np.asarray(data[0], dtype=float)
+        img = ax.imshow(
+            first,
+            cmap=cmap_type,
+            aspect='equal',
+            origin='upper',
+            vmin=0,
+            vmax=3.3,
+        )
         
         # Animation function
         def animate(i):
-            img.set_data(np.flip(data[i], axis=0))
+            img.set_data(np.asarray(data[i], dtype=float))
             return [img]
         
         # Create animation
@@ -1012,11 +1090,11 @@ class App(ctk.CTk):
     def toggle_terminal(self, Event=None):
         if self.debug:
             self.dev_frame.grid_forget()
-            self.debug_button._fg_color = "#dd3b30"
+            self.debug_button.configure(fg_color="#dd3b30")
             self.debug = False
         else:
             self.dev_frame.grid(row=2, column=0, padx=(2.5,10), pady=10, sticky="e")
-            self.debug_button._fg_color = "#49eb34"
+            self.debug_button.configure(fg_color="#49eb34")
             self.debug = True
 '''
     def windowHandler(self, Event=None):
